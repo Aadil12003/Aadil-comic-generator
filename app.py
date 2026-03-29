@@ -18,7 +18,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS - Professional Dark Theme
+# Custom CSS
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap');
@@ -255,7 +255,6 @@ h2, h3, h4 { color: #f5f5f5 !important; font-weight: 600 !important; }
     font-weight: 600 !important;
 }
 
-/* Download Section - Gold Border */
 .download-section {
     background: linear-gradient(145deg, #1e1e1e, #151515);
     border: 3px solid #d4af37;
@@ -271,26 +270,6 @@ h2, h3, h4 { color: #f5f5f5 !important; font-weight: 600 !important; }
     font-weight: 700;
     margin-bottom: 1.5rem;
     text-align: center;
-}
-
-.download-btn-pdf {
-    background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%) !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 12px !important;
-    font-weight: 700 !important;
-    padding: 1rem 2rem !important;
-    font-size: 1.1rem !important;
-}
-
-.download-btn-video {
-    background: linear-gradient(135deg, #4444ff 0%, #0000cc 100%) !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 12px !important;
-    font-weight: 700 !important;
-    padding: 1rem 2rem !important;
-    font-size: 1.1rem !important;
 }
 
 .consistency-badge {
@@ -558,7 +537,7 @@ with gen_col2:
         use_container_width=True
     )
 
-# Generation Logic
+# FIXED Generation Logic
 if generate_btn:
     api_key = get_api_key()
     
@@ -579,13 +558,29 @@ if generate_btn:
                 char_desc = st.session_state.character_description or "consistent appearance"
                 char_prompt = f"CHARACTER REFERENCE (USE THIS FACE): data:image/jpeg;base64,{char_base64}. Character: {char_desc}. "
             
-            # Parse panels
-            raw_panels = re.split(r'\n\s*(?:Panel|PANEL)?\s*\d+[\.:\)]?\s*', story_input)
-            raw_panels = [p.strip() for p in raw_panels if p.strip()]
+            # FIXED: Better story parsing - clean markdown first
+            # Remove code blocks, markdown formatting
+            clean_story = re.sub(r'```[\s\S]*?```', '', story_input)  # Remove code blocks
+            clean_story = re.sub(r'`[^`]*`', '', clean_story)  # Remove inline code
+            clean_story = re.sub(r'\[.*?\]\(.*?\)', '', clean_story)  # Remove markdown links
+            clean_story = re.sub(r'[#*_~]', '', clean_story)  # Remove markdown symbols
             
-            if len(raw_panels) < 2:
-                raw_panels = [p.strip() for p in story_input.split('\n\n') if p.strip()]
+            # Parse panels - look for explicit panel markers first
+            raw_panels = []
             
+            # Try to find "Panel X:" pattern
+            panel_pattern = r'(?:^|\n)\s*(?:Panel|PANEL)\s*(\d+)[:.\)]?\s*(.*?)(?=(?:\n\s*(?:Panel|PANEL)\s*\d+[:.\)]?)|$)'
+            matches = re.findall(panel_pattern, clean_story, re.DOTALL | re.IGNORECASE)
+            
+            if matches:
+                # Sort by panel number and extract text
+                matches = sorted(matches, key=lambda x: int(x[0]))
+                raw_panels = [p[1].strip() for p in matches if p[1].strip()]
+            else:
+                # Fallback: split by double newlines or numbered lists
+                raw_panels = [p.strip() for p in re.split(r'\n\s*\n|\n\s*\d+[.)\]]\s*', clean_story) if p.strip()]
+            
+            # Limit to requested count
             raw_panels = raw_panels[:panel_count]
             
             # Fill if needed
@@ -594,24 +589,33 @@ if generate_btn:
                     longest = max(raw_panels, key=len)
                     idx = raw_panels.index(longest)
                     mid = len(longest) // 2
-                    raw_panels[idx:idx+1] = [longest[:mid], longest[mid:]]
+                    if len(longest) > 100:
+                        raw_panels[idx:idx+1] = [longest[:mid].strip(), longest[mid:].strip()]
+                    else:
+                        raw_panels.append(f"Scene {len(raw_panels) + 1}")
                 else:
                     raw_panels.append(f"Scene {len(raw_panels) + 1}")
+            
+            # Ensure we don't exceed
+            raw_panels = raw_panels[:panel_count]
             
             generated_panels = []
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            for idx, panel_text in enumerate(raw_panels[:panel_count]):
-                status_text.markdown(f'<div class="progress-text">Panel {idx + 1}/{panel_count}: {panel_text[:40]}...</div>', unsafe_allow_html=True)
+            for idx, panel_text in enumerate(raw_panels):
+                # Show progress
+                preview = panel_text[:50] + "..." if len(panel_text) > 50 else panel_text
+                status_text.markdown(f'<div class="progress-text">Panel {idx + 1}/{panel_count}: {preview}</div>', unsafe_allow_html=True)
                 
+                # Style prompts
                 style_prompts = {
-                    "Modern Comic (Marvel/DC)": "modern American comic style, bold dynamic lines, professional coloring, cinematic",
-                    "Manga/Anime": "manga style, detailed inking, expressive features, dynamic composition",
-                    "Noir/Detective": "film noir style, high contrast shadows, gritty atmospheric, dramatic lighting",
-                    "Fantasy/Illustrated": "detailed fantasy illustration, rich cinematic colors, epic scale, painterly",
-                    "Minimalist/Indie": "indie comic style, clean artistic lines, thoughtful composition, muted palette",
-                    "Vintage/Classic": "1950s comic style, vintage coloring, classic retro aesthetic, nostalgic"
+                    "Modern Comic (Marvel/DC)": "modern American comic book style, bold dynamic lines, professional coloring, cinematic composition, high quality",
+                    "Manga/Anime": "manga anime style, detailed inking, expressive features, dynamic composition, professional quality",
+                    "Noir/Detective": "film noir comic style, high contrast shadows, dramatic lighting, gritty atmospheric, cinematic",
+                    "Fantasy/Illustrated": "detailed fantasy illustration, rich cinematic colors, epic scale, painterly professional quality",
+                    "Minimalist/Indie": "indie comic style, clean artistic lines, thoughtful composition, muted palette, professional",
+                    "Vintage/Classic": "1950s vintage comic style, classic coloring, retro aesthetic, professional quality"
                 }
                 
                 color_prompts = {
@@ -625,12 +629,14 @@ if generate_btn:
                 style_desc = style_prompts.get(comic_style, "modern comic")
                 color_desc = color_prompts.get(color_scheme, "full color")
                 
+                # Build prompt
                 if char_base64:
-                    full_prompt = f"""Comic panel {idx+1}. {style_desc}, {color_desc}. {char_prompt}SCENE: {panel_text}. Professional comic art, no text in image, detailed quality."""
+                    full_prompt = f"""Comic book panel illustration. {style_desc}, {color_desc}. {char_prompt}Scene: {panel_text}. Single panel composition, no text in image, professional detailed artwork, high quality."""
                 else:
-                    full_prompt = f"""Comic panel {idx+1}. {style_desc}, {color_desc}. SCENE: {panel_text}. Professional comic art, no text in image, detailed quality, consistent characters throughout story."""
+                    full_prompt = f"""Comic book panel illustration. {style_desc}, {color_desc}. Scene: {panel_text}. Single panel composition, consistent characters throughout story, no text in image, professional detailed artwork, high quality."""
                 
                 try:
+                    # FIXED: Proper API call with error handling
                     response = client.images.generate(
                         model="black-forest-labs/flux-dev",
                         prompt=full_prompt,
@@ -639,19 +645,40 @@ if generate_btn:
                         quality="standard"
                     )
                     
-                    if response.data:
+                    if response.data and len(response.data) > 0:
+                        img_data = response.data[0]
+                        img_url = img_data.url if hasattr(img_data, 'url') else None
+                        
+                        if img_url:
+                            generated_panels.append({
+                                'text': panel_text,
+                                'image_url': img_url,
+                                'panel_num': idx + 1
+                            })
+                        else:
+                            generated_panels.append({
+                                'text': panel_text,
+                                'image_url': None,
+                                'panel_num': idx + 1,
+                                'error': 'No URL in response'
+                            })
+                    else:
                         generated_panels.append({
                             'text': panel_text,
-                            'image_url': response.data[0].url if hasattr(response.data[0], 'url') else None,
-                            'panel_num': idx + 1
+                            'image_url': None,
+                            'panel_num': idx + 1,
+                            'error': 'Empty response data'
                         })
+                        
                 except Exception as e:
+                    error_msg = str(e)
                     generated_panels.append({
                         'text': panel_text,
                         'image_url': None,
                         'panel_num': idx + 1,
-                        'error': str(e)
+                        'error': error_msg
                     })
+                    # Don't stop - continue with other panels
                 
                 progress_bar.progress((idx + 1) / panel_count)
             
@@ -660,10 +687,14 @@ if generate_btn:
             status_text.empty()
             progress_bar.empty()
             
-            st.success(f"✓ Generated {len(generated_panels)} panels!")
+            success_count = sum(1 for p in generated_panels if p.get('image_url'))
+            if success_count == len(generated_panels):
+                st.success(f"✓ Generated all {len(generated_panels)} panels successfully!")
+            else:
+                st.warning(f"⚠ Generated {success_count}/{len(generated_panels)} panels. {len(generated_panels) - success_count} failed.")
             
         except Exception as e:
-            st.error(f"Error: {str(e)}")
+            st.error(f"Generation error: {str(e)}")
 
 # Display Comic
 if st.session_state.generated and st.session_state.comic_panels:
@@ -671,6 +702,13 @@ if st.session_state.generated and st.session_state.comic_panels:
     st.subheader("🎭 Your Generated Comic")
     
     panels = st.session_state.comic_panels
+    
+    # Show error summary if any
+    failed_panels = [p for p in panels if not p.get('image_url')]
+    if failed_panels:
+        with st.expander(f"⚠ {len(failed_panels)} panel(s) failed - Click to see details"):
+            for p in failed_panels:
+                st.text(f"Panel {p['panel_num']}: {p.get('error', 'Unknown error')}")
     
     cols_per_row = 2 if len(panels) <= 6 else 3
     
@@ -689,286 +727,218 @@ if st.session_state.generated and st.session_state.comic_panels:
                     if panel.get('image_url'):
                         st.image(panel['image_url'], use_container_width=True)
                     else:
-                        st.error("⚠ Failed")
+                        st.error(f"⚠ Panel {panel['panel_num']} failed")
+                        if panel.get('error'):
+                            st.caption(f"Error: {panel['error'][:100]}")
                     
                     display_text = panel["text"][:180] + "..." if len(panel["text"]) > 180 else panel["text"]
                     st.markdown(f'<div class="dialogue-bubble">{display_text}</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
 
-    # FUNCTIONAL DOWNLOAD SECTION - PDF & VIDEO ONLY
+    # FIXED DOWNLOAD SECTION
     st.markdown('<div class="download-section">', unsafe_allow_html=True)
     st.markdown('<div class="download-title">💾 Download Your Comic</div>', unsafe_allow_html=True)
     
-    # Create PDF function
+    # FIXED PDF Function
     def create_comic_pdf(panels, style, color_scheme):
-        pdf = FPDF()
-        pdf.set_auto_page_break(auto=True, margin=15)
-        
-        # Title page
-        pdf.add_page()
-        pdf.set_font("Helvetica", "B", 24)
-        pdf.set_text_color(212, 175, 55)  # Gold
-        pdf.cell(0, 20, "Aadil's AI Comic Generator", ln=True, align="C")
-        pdf.ln(10)
-        
-        pdf.set_font("Helvetica", "", 12)
-        pdf.set_text_color(100, 100, 100)
-        pdf.cell(0, 10, f"Style: {style}", ln=True, align="C")
-        pdf.cell(0, 10, f"Color Scheme: {color_scheme}", ln=True, align="C")
-        pdf.cell(0, 10, f"Total Panels: {len(panels)}", ln=True, align="C")
-        pdf.cell(0, 10, f"Created: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
-        pdf.ln(20)
-        
-        # Download images and add to PDF
-        successful_panels = []
-        
-        for panel in panels:
-            if panel.get('image_url'):
-                try:
-                    response = requests.get(panel['image_url'], timeout=30)
-                    if response.status_code == 200:
-                        img = Image.open(io.BytesIO(response.content))
-                        
-                        # Convert to RGB if necessary
-                        if img.mode != 'RGB':
-                            img = img.convert('RGB')
-                        
-                        # Save temp image
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
-                            img.save(tmp.name, 'JPEG', quality=95)
-                            tmp_path = tmp.name
-                        
-                        # Add to PDF
-                        pdf.add_page()
-                        pdf.set_font("Helvetica", "B", 16)
-                        pdf.set_text_color(212, 175, 55)
-                        pdf.cell(0, 10, f"Panel {panel['panel_num']}", ln=True)
-                        pdf.ln(5)
-                        
-                        # Add image (fit to page width)
-                        pdf.image(tmp_path, x=10, y=25, w=190)
-                        
-                        # Add description below
-                        pdf.ln(105)
-                        pdf.set_font("Helvetica", "", 11)
-                        pdf.set_text_color(50, 50, 50)
-                        
-                        # Clean text for PDF
-                        clean_text = panel['text'].encode('latin-1', 'replace').decode('latin-1')
-                        pdf.multi_cell(0, 8, clean_text)
-                        
-                        # Cleanup temp file
-                        os.unlink(tmp_path)
-                        successful_panels.append(panel['panel_num'])
-                        
-                except Exception as e:
-                    # Add text-only page if image fails
-                    pdf.add_page()
-                    pdf.set_font("Helvetica", "B", 16)
-                    pdf.set_text_color(212, 175, 55)
-                    pdf.cell(0, 10, f"Panel {panel['panel_num']}", ln=True)
-                    pdf.ln(10)
-                    pdf.set_font("Helvetica", "", 11)
-                    pdf.set_text_color(100, 100, 100)
-                    clean_text = panel['text'].encode('latin-1', 'replace').decode('latin-1')
-                    pdf.multi_cell(0, 8, clean_text)
-                    pdf.ln(10)
-                    pdf.set_text_color(255, 0, 0)
-                    pdf.cell(0, 10, "[Image generation failed for this panel]", ln=True)
-        
-        # Save PDF to bytes
-        pdf_bytes = pdf.output(dest='S').encode('latin-1')
-        return pdf_bytes
-    
-    # Create video function (MP4 slideshow)
-    def create_comic_video(panels):
         try:
-            import cv2
-            import numpy as np
+            pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=15)
             
-            frames = []
-            fps = 0.5  # 2 seconds per panel
+            # Title page
+            pdf.add_page()
+            pdf.set_font("Helvetica", "B", 24)
+            pdf.set_text_color(212, 175, 55)
+            pdf.cell(0, 20, "Aadil's AI Comic Generator", ln=True, align="C")
+            pdf.ln(10)
             
+            pdf.set_font("Helvetica", "", 12)
+            pdf.set_text_color(100, 100, 100)
+            pdf.cell(0, 10, f"Style: {style}", ln=True, align="C")
+            pdf.cell(0, 10, f"Color Scheme: {color_scheme}", ln=True, align="C")
+            pdf.cell(0, 10, f"Total Panels: {len(panels)}", ln=True, align="C")
+            pdf.cell(0, 10, f"Created: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
+            pdf.ln(20)
+            
+            # Add each panel
             for panel in panels:
-                # Create canvas
-                canvas = np.zeros((720, 1280, 3), dtype=np.uint8)
-                canvas[:] = (26, 26, 26)  # Dark background #1a1a1a
+                pdf.add_page()
                 
-                # Add panel number
-                cv2.putText(canvas, f"Panel {panel['panel_num']}", (50, 50), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1.5, (212, 175, 55), 3)
+                # Panel header
+                pdf.set_font("Helvetica", "B", 16)
+                pdf.set_text_color(212, 175, 55)
+                pdf.cell(0, 10, f"Panel {panel['panel_num']}", ln=True)
+                pdf.ln(5)
                 
-                # Try to load image
+                # Add image if available
                 if panel.get('image_url'):
                     try:
                         response = requests.get(panel['image_url'], timeout=30)
                         if response.status_code == 200:
-                            img_array = np.frombuffer(response.content, np.uint8)
-                            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                            # Save temp image
+                            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                                tmp.write(response.content)
+                                tmp_path = tmp.name
                             
-                            if img is not None:
-                                # Resize to fit canvas
-                                target_height = 500
-                                scale = target_height / img.shape[0]
-                                new_width = int(img.shape[1] * scale)
-                                img = cv2.resize(img, (new_width, target_height))
-                                
-                                # Center image
-                                x_offset = (1280 - new_width) // 2
-                                y_offset = 80
-                                canvas[y_offset:y_offset+target_height, x_offset:x_offset+new_width] = img
+                            # Add to PDF (fit width, maintain aspect)
+                            pdf.image(tmp_path, x=10, y=25, w=190)
+                            
+                            # Remove temp file
+                            os.unlink(tmp_path)
+                            
+                            # Add description below image
+                            pdf.ln(110)  # Space after image
+                        else:
+                            pdf.ln(10)
+                    except Exception as img_err:
+                        pdf.ln(10)
+                        pdf.set_text_color(255, 0, 0)
+                        pdf.cell(0, 10, "[Image failed to load]", ln=True)
+                        pdf.ln(5)
+                else:
+                    pdf.ln(10)
+                
+                # Panel text
+                pdf.set_font("Helvetica", "", 11)
+                pdf.set_text_color(50, 50, 50)
+                
+                # Clean text for PDF (handle encoding)
+                clean_text = panel['text']
+                # Replace problematic characters
+                clean_text = clean_text.replace('—', '-').replace('"', '"').replace('"', '"')
+                clean_text = clean_text.replace(''', "'").replace(''', "'")
+                clean_text = clean_text.encode('latin-1', 'replace').decode('latin-1')
+                
+                pdf.multi_cell(0, 8, clean_text)
+                pdf.ln(10)
+            
+            # Return PDF as bytes - FIXED
+            pdf_output = pdf.output(dest='S')
+            if isinstance(pdf_output, str):
+                return pdf_output.encode('latin-1')
+            else:
+                return bytes(pdf_output) if isinstance(pdf_output, (bytearray, bytes)) else pdf_output.encode('latin-1')
+                
+        except Exception as e:
+            st.error(f"PDF creation error: {str(e)}")
+            return None
+    
+    # Video Function (simplified)
+    def create_comic_video(panels):
+        try:
+            import imageio
+            import numpy as np
+            from PIL import Image, ImageDraw, ImageFont
+            
+            frames = []
+            
+            for panel in panels:
+                # Create canvas
+                canvas = Image.new('RGB', (1280, 720), color=(26, 26, 26))
+                draw = ImageDraw.Draw(canvas)
+                
+                # Try to load font
+                try:
+                    font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
+                    font_text = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
+                except:
+                    font_title = ImageFont.load_default()
+                    font_text = ImageFont.load_default()
+                
+                # Panel number
+                draw.text((50, 30), f"Panel {panel['panel_num']}", fill=(212, 175, 55), font=font_title)
+                
+                # Try to add image
+                if panel.get('image_url'):
+                    try:
+                        response = requests.get(panel['image_url'], timeout=30)
+                        if response.status_code == 200:
+                            img = Image.open(io.BytesIO(response.content))
+                            if img.mode != 'RGB':
+                                img = img.convert('RGB')
+                            # Resize to fit
+                            img.thumbnail((800, 500), Image.Resampling.LANCZOS)
+                            # Paste centered
+                            x = (1280 - img.width) // 2
+                            y = 80
+                            canvas.paste(img, (x, y))
                     except:
                         pass
                 
                 # Add text at bottom
-                text = panel['text'][:100] + "..." if len(panel['text']) > 100 else panel['text']
+                text = panel['text']
                 y_pos = 620
+                # Word wrap
                 words = text.split()
                 line = ""
                 for word in words:
-                    test_line = line + word + " "
-                    if len(test_line) * 15 > 1100:
-                        cv2.putText(canvas, line, (50, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (240, 240, 240), 2)
-                        y_pos += 35
+                    test = line + word + " "
+                    bbox = draw.textbbox((0, 0), test, font=font_text)
+                    if bbox[2] > 1180:
+                        draw.text((50, y_pos), line, fill=(240, 240, 240), font=font_text)
+                        y_pos += 30
                         line = word + " "
                     else:
-                        line = test_line
+                        line = test
                 if line:
-                    cv2.putText(canvas, line, (50, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (240, 240, 240), 2)
+                    draw.text((50, y_pos), line, fill=(240, 240, 240), font=font_text)
                 
-                # Hold frame for 3 seconds (90 frames at 30fps)
+                # Add frame multiple times for duration (3 seconds at 30fps = 90 frames)
                 for _ in range(90):
-                    frames.append(canvas.copy())
+                    frames.append(np.array(canvas))
             
-            # Write video
+            # Save video
             if frames:
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp:
-                    out = cv2.VideoWriter(tmp.name, cv2.VideoWriter_fourcc(*'mp4v'), 30, (1280, 720))
+                    writer = imageio.get_writer(tmp.name, fps=30, quality=8, codec='libx264')
                     for frame in frames:
-                        out.write(frame)
-                    out.release()
+                        writer.append_data(frame)
+                    writer.close()
                     
-                    # Read bytes
                     with open(tmp.name, 'rb') as f:
                         video_bytes = f.read()
                     os.unlink(tmp.name)
                     return video_bytes
             return None
         except Exception as e:
-            st.error(f"Video creation failed: {str(e)}")
-            return None
-    
-    # Simple video alternative (animated GIF-style MP4 using PIL)
-    def create_simple_video(panels):
-        try:
-            frames = []
-            duration = 3000  # 3 seconds per panel in ms
-            
-            for panel in panels:
-                # Create image canvas
-                canvas = Image.new('RGB', (1280, 720), color=(26, 26, 26))
-                
-                # Try to get panel image
-                panel_img = None
-                if panel.get('image_url'):
-                    try:
-                        response = requests.get(panel['image_url'], timeout=30)
-                        if response.status_code == 200:
-                            panel_img = Image.open(io.BytesIO(response.content))
-                            if panel_img.mode != 'RGB':
-                                panel_img = panel_img.convert('RGB')
-                            # Resize
-                            panel_img.thumbnail((800, 500), Image.Resampling.LANCZOS)
-                    except:
-                        pass
-                
-                # Paste image
-                if panel_img:
-                    x = (1280 - panel_img.width) // 2
-                    y = 100
-                    canvas.paste(panel_img, (x, y))
-                
-                # Add text
-                from PIL import ImageDraw, ImageFont
-                draw = ImageDraw.Draw(canvas)
-                
-                # Panel number
-                try:
-                    font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
-                    font_text = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
-                except:
-                    font_title = ImageFont.load_default()
-                    font_text = ImageFont.load_default()
-                
-                draw.text((50, 30), f"Panel {panel['panel_num']}", fill=(212, 175, 55), font=font_title)
-                
-                # Description
-                text = panel['text'][:120] + "..." if len(panel['text']) > 120 else panel['text']
-                y_text = 620
-                draw.text((50, y_text), text, fill=(240, 240, 240), font=font_text)
-                
-                # Save frame multiple times for duration
-                for _ in range(90):  # 3 seconds at 30fps
-                    frames.append(canvas)
-            
-            # Save as MP4 using imageio
-            import imageio
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp:
-                writer = imageio.get_writer(tmp.name, fps=30, quality=8)
-                for frame in frames:
-                    writer.append_data(np.array(frame))
-                writer.close()
-                
-                with open(tmp.name, 'rb') as f:
-                    video_bytes = f.read()
-                os.unlink(tmp.name)
-                return video_bytes
-                
-        except Exception as e:
+            st.error(f"Video error: {str(e)}")
             return None
     
     dl_col1, dl_col2 = st.columns(2)
     
     with dl_col1:
         st.markdown("#### 📕 PDF Comic Book")
-        st.caption("Download as printable PDF with all panels and story")
+        st.caption("Professional printable PDF")
         
-        if st.button("📥 Download PDF", key="pdf_btn", use_container_width=True):
-            with st.spinner("Creating PDF..."):
-                try:
-                    pdf_data = create_comic_pdf(panels, comic_style, color_scheme)
-                    if pdf_data:
-                        st.download_button(
-                            "⬇️ Click to Save PDF",
-                            pdf_data,
-                            file_name=f"Aadil_Comic_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                            mime="application/pdf",
-                            use_container_width=True
-                        )
-                except Exception as e:
-                    st.error(f"PDF creation failed: {str(e)}")
+        if st.button("📥 Create PDF", key="pdf_btn", use_container_width=True):
+            with st.spinner("Creating PDF... This may take a minute"):
+                pdf_data = create_comic_pdf(panels, comic_style, color_scheme)
+                if pdf_data:
+                    st.download_button(
+                        "⬇️ Download PDF",
+                        pdf_data,
+                        file_name=f"Aadil_Comic_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
     
     with dl_col2:
         st.markdown("#### 🎬 Video Comic")
-        st.caption("Download as MP4 video slideshow of your comic")
+        st.caption("MP4 slideshow for sharing")
         
-        if st.button("📥 Download Video", key="video_btn", use_container_width=True):
-            with st.spinner("Creating video (this may take a minute)..."):
-                try:
-                    # Try simple video first
-                    video_data = create_simple_video(panels)
-                    if video_data:
-                        st.download_button(
-                            "⬇️ Click to Save MP4",
-                            video_data,
-                            file_name=f"Aadil_Comic_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
-                            mime="video/mp4",
-                            use_container_width=True
-                        )
-                    else:
-                        st.error("Video creation failed. Try PDF instead.")
-                except Exception as e:
-                    st.error(f"Video error: {str(e)}")
+        if st.button("📥 Create Video", key="video_btn", use_container_width=True):
+            with st.spinner("Creating video... This may take 2-3 minutes"):
+                video_data = create_comic_video(panels)
+                if video_data:
+                    st.download_button(
+                        "⬇️ Download MP4",
+                        video_data,
+                        file_name=f"Aadil_Comic_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
+                        mime="video/mp4",
+                        use_container_width=True
+                    )
+                else:
+                    st.error("Video creation failed. Try PDF instead.")
     
     st.markdown('</div>', unsafe_allow_html=True)
 
