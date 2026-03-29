@@ -1,110 +1,65 @@
 import streamlit as st
 from openai import OpenAI
-import re
 from fpdf import FPDF
+import requests
 from io import BytesIO
+from PIL import Image
 
-# ================= CONFIG =================
-st.set_page_config(page_title="AI Comic Generator", layout="wide")
+# 1. Setup Page
+st.set_page_config(page_title="AI Comic Generator", page_icon="🎨")
+st.title("🎨 AI Comic Generator")
 
-# ================= API =================
-def get_client():
-    try:
-        api_key = st.secrets["NVIDIA_API_KEY"]
-    except:
-        api_key = st.text_input("Enter NVIDIA API Key", type="password")
-
+# 2. Sidebar for API Key
+with st.sidebar:
+    api_key = st.text_input("OpenAI API Key", type="password")
     if not api_key:
-        st.warning("API key required")
-        st.stop()
+        st.warning("Please enter your OpenAI API key to continue.")
 
-    return OpenAI(
-        base_url="https://integrate.api.nvidia.com/v1",
-        api_key=api_key
-    )
+# 3. App Logic
+if api_key:
+    client = OpenAI(api_key=api_key)
+    
+    prompt = st.text_area("Describe your comic scene:", "A brave knight fighting a digital dragon in a neon forest.")
+    
+    if st.button("Generate Comic Page"):
+        with st.spinner("Generating image..."):
+            try:
+                # Generate Image using DALL-E 3
+                response = client.images.generate(
+                    model="dall-e-3",
+                    prompt=f"Comic book style, high quality, vibrant colors: {prompt}",
+                    size="1024x1024",
+                    quality="standard",
+                    n=1,
+                )
+                
+                image_url = response.data[0].url
+                img_data = requests.get(image_url).content
+                st.image(img_data, caption="Your Generated Comic Panel")
+                
+                # 4. Generate PDF
+                pdf = FPDF()
+                pdf.add_page()
+                pdf.set_font("Helvetica", "B", 16)
+                pdf.cell(0, 10, "Your AI Comic", ln=True, align='C')
+                
+                # Save temp image for PDF
+                img = Image.open(BytesIO(img_data))
+                img_path = "temp_comic.png"
+                img.save(img_path)
+                
+                pdf.image(img_path, x=10, y=30, w=190)
+                pdf_output = pdf.output()
+                
+                st.download_button(
+                    label="Download as PDF",
+                    data=bytes(pdf_output),
+                    file_name="comic_page.pdf",
+                    mime="application/pdf"
+                )
+                
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
 
-# ================= STORY PARSER =================
-def parse_story(text, max_panels=10):
-    panels = re.split(r'(?:Panel\s*\d+:)', text, flags=re.IGNORECASE)
-    panels = [p.strip() for p in panels if p.strip()]
-    return panels[:max_panels]
-
-# ================= AI GENERATION =================
-def generate_panels(client, story, panel_count):
-    try:
-        response = client.chat.completions.create(
-            model="meta/llama-3.3-70b-instruct",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a comic generator. Convert story into panels with dialogue."
-                },
-                {
-                    "role": "user",
-                    "content": f"Create {panel_count} comic panels from this:\n{story}"
-                }
-            ],
-            temperature=0.7,
-            max_tokens=2000
-        )
-
-        return response.choices[0].message.content
-
-    except Exception as e:
-        st.error(f"AI Error: {str(e)}")
-        return None
-
-# ================= PDF =================
-def create_pdf(panels):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=10)
-
-    for i, panel in enumerate(panels, 1):
-        pdf.add_page()
-        pdf.set_font("Arial", size=12)
-        pdf.multi_cell(0, 10, f"Panel {i}\n\n{panel}")
-
-    buffer = BytesIO()
-    pdf.output(buffer)
-    buffer.seek(0)
-    return buffer
-
-# ================= UI =================
-
-st.title("🎭 AI Comic Generator")
-
-story = st.text_area(
-    "Enter your story",
-    height=250,
-    placeholder="Panel 1: A boy walks into a dark alley..."
-)
-
-panel_count = st.slider("Number of Panels", 1, 20, 5)
-
-if st.button("Generate Comic"):
-    if len(story.strip()) < 20:
-        st.warning("Story too short")
-        st.stop()
-
-    client = get_client()
-
-    with st.spinner("Generating comic..."):
-        result = generate_panels(client, story, panel_count)
-
-    if result:
-        panels = parse_story(result, panel_count)
-
-        st.success("Comic Generated")
-
-        for i, p in enumerate(panels, 1):
-            st.markdown(f"### Panel {i}")
-            st.write(p)
-
-        pdf = create_pdf(panels)
-
-        st.download_button(
-            label="Download PDF",
-            data=pdf,
-            file_name="comic.pdf",
-            mime="application/pdf"
-        )
+else:
+    st.info("Waiting for API key...")
