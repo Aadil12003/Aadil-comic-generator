@@ -19,7 +19,6 @@ try:
 except Exception:
     API_KEY = None
 
-# Professional Dark UI
 st.markdown("""
     <style>
     .stApp { background-color: #0b0f19; color: #ffffff; }
@@ -31,7 +30,6 @@ st.markdown("""
 
 if 'comic_ready' not in st.session_state: st.session_state.comic_ready = False
 if 'final_images' not in st.session_state: st.session_state.final_images = []
-if 'pdf_bytes' not in st.session_state: st.session_state.pdf_bytes = None
 
 # ==========================================
 # 2. SIDEBAR TOOLS
@@ -47,20 +45,11 @@ with st.sidebar:
         "Cyberpunk Neon", 
         "Dark Noir (B&W)"
     ])
-
-    lighting_choice = st.selectbox("Scene Lighting", [
-        "Cinematic Golden Hour",
-        "Eerie Moonlight",
-        "Neon City Glow",
-        "High-Contrast Shadows",
-        "Bright Daylight",
-        "Dramatic Sunset"
-    ])
     
     style_map = {
         "Modern Superhero (Marvel/DC)": "highly detailed comic book art, sharp inks, vibrant colors",
         "Studio Ghibli Anime": "hand-drawn anime style, soft lighting, Ghibli inspired",
-        "3D Disney/Pixar Style": "octane render, 3D animation style, cute proportions",
+        "3D Disney/Pixar Style": "octane render, 3D animation style, soft shadows",
         "Cyberpunk Neon": "futuristic digital art, glowing neon lights, synthwave",
         "Dark Noir (B&W)": "monochrome, heavy shadows, film noir, gritty"
     }
@@ -77,56 +66,58 @@ def fetch_from_api_with_retry(url, headers, payload):
     response.raise_for_status()
     return response
 
-def add_comic_caption(img, text):
-    """Pro lettering using Bangers-Regular.ttf."""
-    width, height = img.size
+def add_overlay_labels(img, labels):
+    """
+    FIX: Draws text directly on the image (like the sample provided) 
+    instead of in a separate box at the bottom.
+    """
+    draw = ImageDraw.Draw(img)
     try:
-        font = ImageFont.truetype("Bangers-Regular.ttf", 48)
+        font = ImageFont.truetype("Bangers-Regular.ttf", 40)
     except:
         font = ImageFont.load_default()
 
-    wrapped_text = textwrap.fill(text, width=35)
-    dummy_draw = ImageDraw.Draw(Image.new('RGB', (1, 1)))
-    bbox = dummy_draw.textbbox((0, 0), wrapped_text, font=font)
-    tw, th = bbox[2]-bbox[0], bbox[3]-bbox[1]
+    # We position labels at fixed 'hotspots' to mimic the sample
+    positions = [(50, 50), (600, 100), (50, 800)]
     
-    cap_h = th + 90
-    new_img = Image.new('RGB', (width, height + cap_h), '#FFFBEB')
-    new_img.paste(img, (0, 0))
-    draw = ImageDraw.Draw(new_img)
-    draw.line([(0, height), (width, height)], fill="black", width=8)
-    draw.multiline_text(((width-tw)/2, height + (cap_h-th)/2 - 10), wrapped_text, fill="black", font=font, align="center")
-    return new_img
+    for i, label_text in enumerate(labels[:3]):
+        pos = positions[i]
+        # Draw text shadow for readability
+        draw.text((pos[0]+2, pos[1]+2), label_text, fill="black", font=font)
+        # Draw main white text
+        draw.text(pos, label_text, fill="white", font=font)
+    
+    return img
 
 def generate_comic_script(idea, style, panels):
-    """FIXED: Uses Regex to prevent 'Extra Data' JSON errors."""
+    """
+    UPGRADED: Learns from your sample to include character age/labels.
+    """
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     
     system_prompt = f"""
-    You are a professional Storyboard Director. Convert this idea into {panels} panels.
-    STRICT RULES:
-    1. Define a 'Visual Anchor' for the character (hair, clothes) and repeat it in every panel.
-    2. Every `image_prompt` MUST match the `caption` action.
-    3. Output ONLY a raw JSON list between [ and ]. DO NOT include any conversational text.
-    Format: [ {{"caption": "...", "image_prompt": "..."}} ]
+    You are a professional Storyboard Director.
+    TASK: Convert this idea into {panels} panels.
+    
+    CONSISTENCY RULES:
+    1. Define 'Character 1' and 'Character 2' visual tags (e.g. 'Aadill: 24yo, beard, tan shirt').
+    2. Repeat these tags in EVERY panel's image_prompt.
+    3. Include 2-3 short 'labels' for each panel (e.g. 'Age: 22', 'Aadill: 24').
+    
+    Output ONLY a JSON list: 
+    [ {{"labels": ["Label 1", "Label 2"], "image_prompt": "..."}} ]
     """
     payload = {
         "model": "meta/llama-3.1-8b-instruct",
         "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": idea}],
-        "temperature": 0.1 # Even lower for stricter JSON adherence
+        "temperature": 0.2
     }
     
     res = fetch_from_api_with_retry(url, headers, payload)
     raw_text = res.json()["choices"][0]["message"]["content"]
-    
-    # FIX: Regex identifies exactly where the JSON starts and ends
     json_match = re.search(r'\[.*\]', raw_text, re.DOTALL)
-    if json_match:
-        return json.loads(json_match.group(0))
-    else:
-        # Emergency fallback if AI failed completely
-        raise Exception("AI failed to generate a valid script format. Please try again.")
+    return json.loads(json_match.group(0))
 
 def generate_image(prompt, seed):
     url = "https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-xl"
@@ -142,49 +133,40 @@ def generate_image(prompt, seed):
 # ==========================================
 # 4. MAIN INTERFACE
 # ==========================================
-st.title("📓 Professional AI Comic Studio")
-user_idea = st.text_area("📖 What is the story about?", "A rogue astronaut finds an ancient library on a dead moon.", height=100)
+st.title("📓 Character-Consistent Comic Studio")
+st.markdown("This tool now places labels directly on images to fix character identity.")
+
+user_idea = st.text_area("📖 Story Idea", "Aadill and the Angel walking through a rainy temple.", height=100)
 
 if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
     try:
         shared_seed = int(time.time()) % 1000000
         style_tags = style_map[art_choice]
         
-        with st.status(f"🎬 Synching Story & Art...", expanded=True) as status:
+        with st.status(f"🎬 Synching Character Identities...", expanded=True) as status:
             script = generate_comic_script(user_idea, art_choice, num_panels)
             
             panels_out = []
             for i, scene in enumerate(script):
-                # Inject style and lighting into every panel
-                full_prompt = f"{style_tags}, {lighting_choice}, " + scene.get("image_prompt", "Comic scene")
-                c_text = scene.get("caption", "")
+                full_prompt = f"{style_tags}, " + scene.get("image_prompt", "Comic scene")
+                labels = scene.get("labels", [])
                 
-                status.update(label=f"🖌️ Panel {i+1}: {c_text[:30]}...")
+                status.update(label=f"🖌️ Drawing Panel {i+1}...")
                 img = generate_image(full_prompt, shared_seed)
-                panels_out.append(add_comic_caption(img, c_text))
+                
+                # Apply labels directly ON the image
+                labeled_img = add_overlay_labels(img, labels)
+                panels_out.append(labeled_img)
             
             st.session_state.final_images = panels_out
-            
-            # PDF Generation
-            pdf = FPDF()
-            for p in panels_out:
-                pdf.add_page(); buf = BytesIO(); p.save(buf, format="PNG")
-                pdf.image(buf, x=10, y=10, w=190)
-            st.session_state.pdf_bytes = bytes(pdf.output())
             st.session_state.comic_ready = True
-            status.update(label="🎉 Story Synced Successfully!", state="complete")
+            status.update(label="🎉 Identity Locked and Generated!", state="complete")
 
     except Exception as e:
         st.error(f"Error: {e}")
 
 if st.session_state.comic_ready:
-    col1, col2 = st.columns(2)
-    with col1: st.download_button("📄 Download PDF", st.session_state.pdf_bytes, "comic.pdf", "application/pdf", use_container_width=True)
-    with col2:
-        gif_buf = BytesIO(); st.session_state.final_images[0].save(gif_buf, format="GIF", save_all=True, append_images=st.session_state.final_images[1:], duration=2000, loop=0)
-        st.download_button("🎞️ Download GIF", gif_buf.getvalue(), "comic.gif", "image/gif", use_container_width=True)
-
-    st.markdown("---")
     cols = st.columns(2)
     for idx, img in enumerate(st.session_state.final_images):
-        with cols[idx % 2]: st.image(img, use_container_width=True)
+        with cols[idx % 2]:
+            st.image(img, use_container_width=True)
