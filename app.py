@@ -19,6 +19,7 @@ try:
 except Exception:
     API_KEY = None
 
+# Professional Dark UI
 st.markdown("""
     <style>
     .stApp { background-color: #0b0f19; color: #ffffff; }
@@ -28,21 +29,29 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# Session State for persistence
 if 'comic_ready' not in st.session_state: st.session_state.comic_ready = False
 if 'final_images' not in st.session_state: st.session_state.final_images = []
+if 'pdf_data' not in st.session_state: st.session_state.pdf_data = None
 
 # ==========================================
-# 3. SIDEBAR
+# 2. SIDEBAR TOOLS
 # ==========================================
 with st.sidebar:
     st.header("🛠️ Director's Tools")
-    if not API_KEY: st.error("Missing NVIDIA_API_KEY in Secrets!")
+    if not API_KEY: st.error("⚠️ NVIDIA_API_KEY is missing!")
+    
     num_panels = st.number_input("Number of Panels", min_value=1, value=4, step=1)
     art_style = st.selectbox("Comic Style", ["Modern American Comic", "Classic Vintage", "Japanese Manga", "Dark Noir", "Vibrant Cyberpunk"])
     reference_image = st.file_uploader("Optional: Character Reference", type=['png', 'jpg', 'jpeg'])
+    
+    st.markdown("---")
+    if st.button("🔄 Start New Story"):
+        for key in list(st.session_state.keys()): del st.session_state[key]
+        st.rerun()
 
 # ==========================================
-# 4. CORE AI FUNCTIONS
+# 3. CORE AI FUNCTIONS
 # ==========================================
 def fetch_from_api_with_retry(url, headers, payload, max_retries=3):
     for attempt in range(max_retries):
@@ -57,7 +66,7 @@ def fetch_from_api_with_retry(url, headers, payload, max_retries=3):
             raise Exception(f"Connection Error: {e}")
 
 def add_comic_caption(img, text):
-    """Pro lettering using your Bangers-Regular.ttf file."""
+    """Pro lettering using Bangers-Regular.ttf."""
     width, height = img.size
     font_size = 48
     try:
@@ -71,7 +80,7 @@ def add_comic_caption(img, text):
     bbox = dummy_draw.textbbox((0, 0), wrapped_text, font=font)
     tw, th = bbox[2]-bbox[0], bbox[3]-bbox[1]
     
-    cap_h = th + 80
+    cap_h = th + 90
     new_img = Image.new('RGB', (width, height + cap_h), '#FFFBEB')
     new_img.paste(img, (0, 0))
     draw = ImageDraw.Draw(new_img)
@@ -86,13 +95,13 @@ def generate_comic_script(idea, style, panels):
     
     system_prompt = f"""
     Write a {panels}-panel comic. Return ONLY a JSON list.
-    Rules: Short captions (15 words). Use visual tags for character consistency.
+    Rules: Short captions (15 words). Focus on gritty descriptions.
     Structure: [ {{"caption": "...", "image_prompt": "..."}} ]
     """
     payload = {
         "model": "meta/llama-3.1-8b-instruct",
         "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": idea}],
-        "temperature": 0.3
+        "temperature": 0.4
     }
     
     res = fetch_from_api_with_retry(url, headers, payload)
@@ -116,10 +125,10 @@ def generate_image(prompt, seed, init_b64=None):
     return Image.open(BytesIO(base64.b64decode(b64))), b64
 
 # ==========================================
-# 5. MAIN RENDER
+# 4. MAIN INTERFACE
 # ==========================================
 st.title("📓 Professional AI Comic Studio")
-user_idea = st.text_area("📖 Story Idea", "A small blue robot discovers a flower in a wasteland.", height=100)
+user_idea = st.text_area("📖 What is the story about?", "A rogue astronaut finds an ancient library on a dead moon.", height=100)
 
 if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
     try:
@@ -133,26 +142,46 @@ if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
             
             panels_out = []
             for i, scene in enumerate(script):
-                # FIXED: Safety Mapping for key errors
-                p_text = scene.get("image_prompt") or scene.get("prompt") or scene.get("visual") or "Comic scene"
-                c_text = scene.get("caption") or scene.get("text") or ""
+                p_text = f"{art_style} style, {scene.get('image_prompt', 'Comic scene')}"
+                c_text = scene.get("caption", "")
                 
                 status.update(label=f"🖌️ Drawing Panel {i+1}...")
                 img, curr_b64 = generate_image(p_text, shared_seed, anchor_b64)
                 
-                # Consistency Lock: If no upload, Panel 1 becomes the reference for Panel 2+
                 if i == 0 and not reference_image:
                     anchor_b64 = curr_b64
                 
                 panels_out.append(add_comic_caption(img, c_text))
             
+            # Save results
             st.session_state.final_images = panels_out
+            
+            # Create PDF
+            pdf = FPDF()
+            for p in panels_out:
+                pdf.add_page()
+                buf = BytesIO()
+                p.save(buf, format="PNG")
+                pdf.image(buf, x=10, y=10, w=190)
+            st.session_state.pdf_data = pdf.output()
+            
             st.session_state.comic_ready = True
             status.update(label="🎉 Production Complete!", state="complete")
 
     except Exception as e:
         st.error(f"Production Halted: {e}")
 
+# Display and Downloads
 if st.session_state.comic_ready:
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button("📄 Download PDF Book", st.session_state.pdf_data, "comic.pdf", "application/pdf", use_container_width=True)
+    with col2:
+        # Create GIF
+        gif_buf = BytesIO()
+        st.session_state.final_images[0].save(gif_buf, format="GIF", save_all=True, append_images=st.session_state.final_images[1:], duration=2000, loop=0)
+        st.download_button("🎞️ Download GIF", gif_buf.getvalue(), "comic.gif", "image/gif", use_container_width=True)
+
+    st.markdown("---")
     for img in st.session_state.final_images:
         st.image(img, use_container_width=True)
