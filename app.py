@@ -102,7 +102,7 @@ def add_comic_caption(img, text):
     return new_img
 
 def generate_comic_script(idea, style, panels):
-    """Calls NVIDIA LLaMA 3 to act as the Comic Director using Strict JSON Mode."""
+    """Calls NVIDIA LLaMA 3 to act as the Comic Director."""
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     
@@ -110,20 +110,19 @@ def generate_comic_script(idea, style, panels):
     You are a master comic book writer. Convert the user's idea into a {panels}-panel story.
     
     CRITICAL RULES:
-    1. You MUST output a valid JSON object.
-    2. The JSON object MUST contain a single key called "panels" which holds an array of scenes.
-    3. Character consistency is CRITICAL. Define exact appearance (clothes, hair, face) and repeat it exactly in every prompt.
+    1. Output ONLY a valid JSON array.
+    2. Start your response with [ and end with ].
+    3. DO NOT use double quotes (") inside your string values. Use single quotes (') instead.
+    4. Character consistency is CRITICAL. Define exact appearance (clothes, hair, face) and repeat it exactly in every prompt.
     
-    REQUIRED JSON STRUCTURE:
-    {{
-      "panels": [
-        {{
-          "scene_number": 1,
-          "caption": "A dramatic narration or dialogue box.",
-          "image_prompt": "{style} style, high quality. [Exact Character Description]. [Action]. [Environment]."
-        }}
-      ]
-    }}
+    JSON STRUCTURE:
+    [
+      {{
+        "scene_number": 1,
+        "caption": "A dramatic narration or dialogue box.",
+        "image_prompt": "{style} style, high quality. [Exact Character Description]. [Action]. [Environment]."
+      }}
+    ]
     """
     
     payload = {
@@ -133,20 +132,32 @@ def generate_comic_script(idea, style, panels):
             {"role": "user", "content": f"My comic idea: {idea}"}
         ],
         "temperature": 0.3,
-        "max_tokens": 1500,
-        "response_format": {"type": "json_object"} # THIS FORCES 100% VALID JSON
+        "max_tokens": 1500
     }
     
     response = fetch_from_api_with_retry(url, headers, payload)
-    raw_text = response.json()["choices"][0]["message"]["content"]
     
+    # Safely extract the content
+    raw_text = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+    
+    # Check if NVIDIA returned a blank string (often due to content filters)
+    if not raw_text or not raw_text.strip():
+        raise Exception("NVIDIA returned an empty response. Your prompt might have triggered their safety filters, or the server glitched. Try tweaking your story idea!")
+    
+    # Aggressive cleanup: remove markdown blocks if they exist
+    clean_text = re.sub(r'```json\s*', '', raw_text)
+    clean_text = re.sub(r'```', '', clean_text).strip()
+    
+    # Snip out only the JSON array
+    match = re.search(r'\[.*\]', clean_text, re.DOTALL)
+    if match:
+        clean_text = match.group(0)
+        
     try:
-        # Load the JSON and extract the list of panels from inside the object
-        data = json.loads(raw_text)
-        return data["panels"]
-    except Exception as e:
-        print(f"RAW OUTPUT FAILED:\n{raw_text}")
-        raise Exception(f"The AI writer encountered a structural error. Please try again! (Details: {e})")
+        return json.loads(clean_text)
+    except json.JSONDecodeError as e:
+        print(f"FAILED TO PARSE JSON. RAW AI OUTPUT WAS:\n{raw_text}")
+        raise Exception(f"The AI writer made a formatting error. Please click 'Produce My Comic' again! (Details: {e})")
 
 def generate_image(prompt, ref_image=None):
     """Calls NVIDIA SDXL to generate the panel."""
