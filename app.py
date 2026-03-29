@@ -14,13 +14,11 @@ from PIL import Image, ImageDraw, ImageFont
 # ==========================================
 st.set_page_config(page_title="Pro AI Comic Studio", page_icon="📓", layout="wide")
 
-# Securely grab the API key from Streamlit Cloud Secrets
 try:
     API_KEY = st.secrets["NVIDIA_API_KEY"]
 except Exception:
     API_KEY = None
 
-# Custom CSS for a premium dark mode UI
 st.markdown("""
     <style>
     .stApp { background-color: #0b0f19; color: #ffffff; }
@@ -53,7 +51,7 @@ with st.sidebar:
     if not API_KEY:
         st.error("⚠️ NVIDIA_API_KEY is missing from Streamlit Secrets!")
     
-    num_panels = st.number_input("Number of Panels", min_value=1, value=4, step=1, help="Choose how long your comic will be.")
+    num_panels = st.number_input("Number of Panels", min_value=1, value=4, step=1)
     
     st.markdown("### 🎨 Art Direction")
     art_style = st.selectbox(
@@ -67,7 +65,7 @@ with st.sidebar:
         st.success("Reference image loaded! It will guide the character design.")
 
 # ==========================================
-# 4. CORE AI FUNCTIONS WITH RETRY LOGIC
+# 4. CORE AI FUNCTIONS (UPGRADED)
 # ==========================================
 def fetch_from_api_with_retry(url, headers, payload, max_retries=3):
     """Robust API caller that handles 504 timeouts and retries automatically."""
@@ -84,43 +82,75 @@ def fetch_from_api_with_retry(url, headers, payload, max_retries=3):
                 raise Exception(f"API Failed after {max_retries} attempts. Error: {e}")
 
 def add_comic_caption(img, text):
-    """Adds a white caption box with text at the bottom of the image."""
+    """Pro lettering engine: Dynamic height, centered text, comic styling."""
     width, height = img.size
-    caption_height = 180 
     
-    new_img = Image.new('RGB', (width, height + caption_height), '#ffffff')
+    # 1. Intelligent Font Loading
+    try:
+        # Tries your custom font first
+        font = ImageFont.truetype("Bangers-Regular.ttf", 36) 
+    except IOError:
+        try:
+            # Fallback to standard bold Linux font (looks much better than default)
+            font = ImageFont.truetype("DejaVuSans-Bold.ttf", 26)
+        except IOError:
+            # Absolute last resort
+            font = ImageFont.load_default()
+            
+    # 2. Text Wrapping
+    wrapped_text = textwrap.fill(text, width=45)
+    
+    # 3. Dynamic Height Calculation (Pillow 10+ compatible)
+    dummy_img = Image.new('RGB', (1, 1))
+    dummy_draw = ImageDraw.Draw(dummy_img)
+    bbox = dummy_draw.textbbox((0, 0), wrapped_text, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    
+    # Add padding so it breathes well
+    caption_height = max(140, text_height + 80) 
+    
+    # 4. Create the final canvas with a subtle comic paper tint
+    new_img = Image.new('RGB', (width, height + caption_height), '#FFFBEB') 
     new_img.paste(img, (0, 0))
     draw = ImageDraw.Draw(new_img)
-    wrapped_text = textwrap.fill(text, width=60)
     
-    try:
-        font = ImageFont.truetype("Bangers-Regular.ttf", 32) 
-    except IOError:
-        font = ImageFont.load_default()
-        
-    draw.text((20, height + 20), wrapped_text, fill="black", font=font)
+    # 5. Draw a thick black comic panel border separator
+    draw.line([(0, height), (width, height)], fill="black", width=6)
+    
+    # 6. Center the text perfectly inside the new caption box
+    text_x = (width - text_width) / 2
+    text_y = height + ((caption_height - text_height) / 2) - 10
+    
+    draw.multiline_text((text_x, text_y), wrapped_text, fill="black", font=font, align="center")
+    
     return new_img
 
 def generate_comic_script(idea, style, panels):
-    """Calls NVIDIA LLaMA 3 to act as the Comic Director."""
+    """Calls NVIDIA LLaMA 3 with an aggressive Master-Writer prompt."""
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     
     system_prompt = f"""
-    You are a master comic book writer. Convert the user's idea into a {panels}-panel story.
+    You are an Eisner-Award winning comic book writer. Convert the user's idea into a gripping {panels}-panel story.
     
-    CRITICAL RULES:
+    STORYTELLING RULES (CRITICAL):
+    1. Pacing: Panel 1 introduces the hook, middle panels escalate tension, the final panel hits a powerful climax or cliffhanger.
+    2. Show, Don't Tell: Write incredibly detailed visual `image_prompts`. Make the artist do the heavy lifting.
+    3. Punchy Text: The `caption` MUST be short (MAXIMUM 20 words per panel). Use gritty, heroic, or dramatic comic-book narration. NO long paragraphs.
+    4. Character Consistency: Define exact appearance (clothes, hair, face) and repeat it identically in every prompt.
+    
+    JSON FORMATTING RULES:
     1. Output ONLY a valid JSON array.
     2. Start your response with [ and end with ].
     3. DO NOT use double quotes (") inside your string values. Use single quotes (') instead.
-    4. Character consistency is CRITICAL. Define exact appearance (clothes, hair, face) and repeat it exactly in every prompt.
     
     JSON STRUCTURE:
     [
       {{
         "scene_number": 1,
-        "caption": "A dramatic narration or dialogue box.",
-        "image_prompt": "{style} style, high quality. [Exact Character Description]. [Action]. [Environment]."
+        "caption": "Short, dramatic narration box (max 20 words).",
+        "image_prompt": "{style} style, high quality. [Exact Character Description]. [Action]. [Lighting/Camera Angle]."
       }}
     ]
     """
@@ -131,24 +161,19 @@ def generate_comic_script(idea, style, panels):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"My comic idea: {idea}"}
         ],
-        "temperature": 0.3,
+        "temperature": 0.4, # Slightly higher for better creative storytelling
         "max_tokens": 1500
     }
     
     response = fetch_from_api_with_retry(url, headers, payload)
-    
-    # Safely extract the content
     raw_text = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
     
-    # Check if NVIDIA returned a blank string (often due to content filters)
     if not raw_text or not raw_text.strip():
-        raise Exception("NVIDIA returned an empty response. Your prompt might have triggered their safety filters, or the server glitched. Try tweaking your story idea!")
+        raise Exception("NVIDIA returned an empty response. Try a different story prompt!")
     
-    # Aggressive cleanup: remove markdown blocks if they exist
     clean_text = re.sub(r'```json\s*', '', raw_text)
     clean_text = re.sub(r'```', '', clean_text).strip()
     
-    # Snip out only the JSON array
     match = re.search(r'\[.*\]', clean_text, re.DOTALL)
     if match:
         clean_text = match.group(0)
@@ -190,7 +215,6 @@ st.markdown("Write a prompt. Our AI directs the scenes, illustrates the art, and
 
 user_idea = st.text_area("📖 What is the story about?", "A rogue AI decides it wants to become a chef in a cyberpunk city, but the local mafia steals its recipes.", height=120)
 
-# Generate Button Logic
 if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
     if not API_KEY:
         st.error("Cannot generate: API Key is missing. Check your Streamlit Secrets.")
@@ -259,7 +283,6 @@ if st.session_state.comic_ready:
         st.download_button("🎞️ Download Animated Video (GIF)", data=st.session_state.gif_bytes, file_name="comic_motion.gif", mime="image/gif", use_container_width=True)
         
     st.markdown("---")
-    # New Reset Button
     if st.button("🔄 Start New Comic", use_container_width=True):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
