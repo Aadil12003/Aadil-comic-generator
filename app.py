@@ -15,7 +15,7 @@ st.set_page_config(page_title="Pro AI Comic Studio", page_icon="📓", layout="w
 
 # PUT YOUR NVIDIA API KEY HERE (Since you pasted it in the background)
 # Alternatively, use st.secrets["NVIDIA_API_KEY"] if using Streamlit Secrets
-API_KEY = "YOUR_NVIDIA_API_KEY_HERE" 
+API_KEY = "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" 
 
 # Custom CSS for a premium dark mode UI
 st.markdown("""
