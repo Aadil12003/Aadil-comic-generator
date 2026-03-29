@@ -13,9 +13,11 @@ from PIL import Image, ImageDraw, ImageFont
 # ==========================================
 st.set_page_config(page_title="Pro AI Comic Studio", page_icon="📓", layout="wide")
 
-# PUT YOUR NVIDIA API KEY HERE (Since you pasted it in the background)
-# Alternatively, use st.secrets["NVIDIA_API_KEY"] if using Streamlit Secrets
-API_KEY = "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" 
+# Securely grab the API key from Streamlit Cloud Secrets
+try:
+    API_KEY = st.secrets["NVIDIA_API_KEY"]
+except Exception:
+    API_KEY = None
 
 # Custom CSS for a premium dark mode UI
 st.markdown("""
@@ -24,7 +26,6 @@ st.markdown("""
     .stSidebar { background-color: #111827; }
     .panel-box { border: 1px solid #374151; padding: 15px; border-radius: 12px; background-color: #1f2937; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3); }
     h1, h2, h3 { color: #f87171; font-family: 'Arial Black', sans-serif; }
-    .comic-text { font-style: italic; color: #9ca3af; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -33,6 +34,9 @@ st.markdown("""
 # ==========================================
 with st.sidebar:
     st.header("🛠️ Director's Tools")
+    
+    if not API_KEY:
+        st.error("⚠️ NVIDIA_API_KEY is missing from Streamlit Secrets!")
     
     # Unlimited panels
     num_panels = st.number_input("Number of Panels", min_value=1, value=4, step=1, help="Choose how long your comic will be.")
@@ -56,26 +60,20 @@ with st.sidebar:
 def add_comic_caption(img, text):
     """Adds a white caption box with text at the bottom of the image."""
     width, height = img.size
-    caption_height = 180 # Height of the text box
+    caption_height = 180 
     
-    # Create a new image with space for the text
     new_img = Image.new('RGB', (width, height + caption_height), '#ffffff')
     new_img.paste(img, (0, 0))
-    
     draw = ImageDraw.Draw(new_img)
+    wrapped_text = textwrap.fill(text, width=60)
     
-    # Wrap text so it fits inside the image width
-    # (Adjust width=60 depending on the font size and image width)
-    wrapped_text = textwrap.fill(text, width=70)
-    
-    # Load default font (For better results, you can upload a .ttf file to your repo and use ImageFont.truetype("font.ttf", 30))
-    # Using default here to ensure it works immediately without external files
     try:
-        font = ImageFont.truetype("arial.ttf", 24) # Tries to use Arial if available on system
+        # Tries to load a custom font if you uploaded one to GitHub
+        font = ImageFont.truetype("Bangers-Regular.ttf", 32) 
     except IOError:
+        # Fallback to default if the file isn't there
         font = ImageFont.load_default()
         
-    # Draw text in black
     draw.text((20, height + 20), wrapped_text, fill="black", font=font)
     return new_img
 
@@ -86,11 +84,12 @@ def generate_comic_script(idea, style, panels):
     
     system_prompt = f"""
     You are a master comic book writer. Convert the user's idea into a {panels}-panel story.
-    Make the storytelling captivating, dramatic, and emotional.
     
-    RULES:
-    - Character consistency is CRITICAL. Define exact appearance (clothes, hair, face) and repeat it exactly in every image prompt.
-    - Output strictly valid JSON.
+    CRITICAL JSON RULES:
+    - Output ONLY valid JSON. Absolutely no markdown, no intro text, no outro text.
+    - DO NOT use double quotes (") inside your string values. Use single quotes (') instead.
+    - DO NOT use newlines or line breaks inside the text.
+    - Character consistency is CRITICAL. Define exact appearance (clothes, hair, face) and repeat it exactly in every prompt.
     
     JSON STRUCTURE:
     [
@@ -109,16 +108,23 @@ def generate_comic_script(idea, style, panels):
             {"role": "user", "content": f"My comic idea: {idea}"}
         ],
         "temperature": 0.4,
-        "max_tokens": 1500
+        "max_tokens": 2000 
     }
     
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
-    clean_text = re.sub(r'```json|```', '', response.json()["choices"][0]["message"]["content"]).strip()
-    return json.loads(clean_text)
+    
+    raw_text = response.json()["choices"][0]["message"]["content"]
+    clean_text = re.sub(r'```json\s*', '', raw_text)
+    clean_text = re.sub(r'```', '', clean_text).strip()
+    
+    try:
+        return json.loads(clean_text)
+    except json.JSONDecodeError as e:
+        raise Exception("The AI writer made a formatting error in the script. Please click 'Produce My Comic' again to regenerate!")
 
 def generate_image(prompt, ref_image=None):
-    """Calls NVIDIA SDXL to generate the panel, using a reference image if provided."""
+    """Calls NVIDIA SDXL to generate the panel."""
     url = "https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-xl"
     headers = {"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"}
     
@@ -130,12 +136,11 @@ def generate_image(prompt, ref_image=None):
         "steps": 30
     }
     
-    # If user uploaded a reference image, encode it and add to payload (Image-to-Image)
     if ref_image:
         ref_bytes = ref_image.getvalue()
         base64_ref = base64.b64encode(ref_bytes).decode('utf-8')
         payload["init_image"] = base64_ref
-        payload["image_strength"] = 0.35 # How much the reference controls the output
+        payload["image_strength"] = 0.35 
     
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
@@ -151,67 +156,61 @@ st.markdown("Write a prompt. Our AI directs the scenes, illustrates the art, and
 user_idea = st.text_area("📖 What is the story about?", "A rogue AI decides it wants to become a chef in a cyberpunk city, but the local mafia steals its recipes.", height=120)
 
 if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
-    
-    generated_images = []
-    script_data = []
-    
-    try:
-        with st.status("🎬 Pre-Production: Writing script & designing characters...", expanded=True) as status:
-            script_data = generate_comic_script(user_idea, art_style, num_panels)
-            st.write("✅ Script locked in! Sending to illustration team...")
-            
-            # Create a nice visual grid based on panel count
-            cols = st.columns(2) # 2 panels per row
-            
-            for i, scene in enumerate(script_data):
-                status.update(label=f"🖌️ Illustrating & Lettering Panel {i+1} of {num_panels}...", state="running")
-                
-                # 1. Generate Base Image
-                base_img = generate_image(scene["image_prompt"], reference_image)
-                
-                # 2. Add Story/Caption directly onto the image
-                final_img = add_comic_caption(base_img, scene["caption"])
-                generated_images.append(final_img)
-                
-                # 3. Display in UI
-                col_index = i % 2
-                with cols[col_index]:
-                    st.markdown("<div class='panel-box'>", unsafe_allow_html=True)
-                    st.image(final_img, use_container_width=True)
-                    st.markdown(f"**Scene {scene['scene_number']}**")
-                    with st.expander("Technical Prompt"):
-                        st.caption(scene["image_prompt"])
-                    st.markdown("</div><br>", unsafe_allow_html=True)
-            
-            status.update(label="🎉 Comic Production Complete!", state="complete")
-
-        # ==========================================
-        # 5. EXPORT OPTIONS
-        # ==========================================
-        st.markdown("---")
-        st.markdown("### 📥 Download Deliverables")
-        export_col1, export_col2 = st.columns(2)
+    if not API_KEY:
+        st.error("Cannot generate: API Key is missing. Check your Streamlit Secrets.")
+    else:
+        generated_images = []
+        script_data = []
         
-        # PDF Export
-        pdf = FPDF()
-        for i, img in enumerate(generated_images):
-            pdf.add_page()
-            temp_path = f"temp_final_{i}.png"
-            img.save(temp_path)
-            # Center the image on the PDF page
-            pdf.image(temp_path, x=20, y=20, w=170)
+        try:
+            with st.status("🎬 Pre-Production: Writing script & designing characters...", expanded=True) as status:
+                script_data = generate_comic_script(user_idea, art_style, num_panels)
+                st.write("✅ Script locked in! Sending to illustration team...")
+                
+                cols = st.columns(2) 
+                
+                for i, scene in enumerate(script_data):
+                    status.update(label=f"🖌️ Illustrating & Lettering Panel {i+1} of {num_panels}...", state="running")
+                    
+                    base_img = generate_image(scene["image_prompt"], reference_image)
+                    final_img = add_comic_caption(base_img, scene["caption"])
+                    generated_images.append(final_img)
+                    
+                    col_index = i % 2
+                    with cols[col_index]:
+                        st.markdown("<div class='panel-box'>", unsafe_allow_html=True)
+                        st.image(final_img, use_container_width=True)
+                        st.markdown(f"**Scene {scene['scene_number']}**")
+                        with st.expander("Technical Prompt"):
+                            st.caption(scene["image_prompt"])
+                        st.markdown("</div><br>", unsafe_allow_html=True)
+                
+                status.update(label="🎉 Comic Production Complete!", state="complete")
+
+            # ==========================================
+            # 5. EXPORT OPTIONS
+            # ==========================================
+            st.markdown("---")
+            st.markdown("### 📥 Download Deliverables")
+            export_col1, export_col2 = st.columns(2)
             
-        pdf_bytes = bytes(pdf.output())
-        with export_col1:
-            st.download_button("📄 Download PDF Book", data=pdf_bytes, file_name="ai_comic_book.pdf", mime="application/pdf", use_container_width=True)
+            pdf = FPDF()
+            for i, img in enumerate(generated_images):
+                pdf.add_page()
+                temp_path = f"temp_final_{i}.png"
+                img.save(temp_path)
+                pdf.image(temp_path, x=20, y=20, w=170)
+                
+            pdf_bytes = bytes(pdf.output())
+            with export_col1:
+                st.download_button("📄 Download PDF Book", data=pdf_bytes, file_name="ai_comic_book.pdf", mime="application/pdf", use_container_width=True)
 
-        # Video/GIF Export
-        gif_buffer = BytesIO()
-        generated_images[0].save(
-            gif_buffer, format="GIF", save_all=True, append_images=generated_images[1:], duration=2500, loop=0
-        )
-        with export_col2:
-            st.download_button("🎞️ Download Animated Video (GIF)", data=gif_buffer.getvalue(), file_name="comic_motion.gif", mime="image/gif", use_container_width=True)
+            gif_buffer = BytesIO()
+            generated_images[0].save(
+                gif_buffer, format="GIF", save_all=True, append_images=generated_images[1:], duration=2500, loop=0
+            )
+            with export_col2:
+                st.download_button("🎞️ Download Animated Video (GIF)", data=gif_buffer.getvalue(), file_name="comic_motion.gif", mime="image/gif", use_container_width=True)
 
-    except Exception as e:
-        st.error(f"Production Halted! Error details: {e}")
+        except Exception as e:
+            st.error(f"Production Halted! Error details: {e}")
