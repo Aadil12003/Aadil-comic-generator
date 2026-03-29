@@ -29,7 +29,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Session State for persistence
 if 'comic_ready' not in st.session_state: st.session_state.comic_ready = False
 if 'final_images' not in st.session_state: st.session_state.final_images = []
 if 'pdf_data' not in st.session_state: st.session_state.pdf_data = None
@@ -43,9 +42,10 @@ with st.sidebar:
     
     num_panels = st.number_input("Number of Panels", min_value=1, value=4, step=1)
     art_style = st.selectbox("Comic Style", ["Modern American Comic", "Classic Vintage", "Japanese Manga", "Dark Noir", "Vibrant Cyberpunk"])
-    reference_image = st.file_uploader("Optional: Character Reference", type=['png', 'jpg', 'jpeg'])
     
     st.markdown("---")
+    st.info("💡 **Consistency Mode:** Using Seed Locking to keep characters matching across all panels.")
+    
     if st.button("🔄 Start New Story"):
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
@@ -95,7 +95,8 @@ def generate_comic_script(idea, style, panels):
     
     system_prompt = f"""
     Write a {panels}-panel comic. Return ONLY a JSON list.
-    Rules: Short captions (15 words). Focus on gritty descriptions.
+    Rules: Short captions (15 words). 
+    CRITICAL: The image_prompt MUST describe the character's physical features (hair, clothes) identically in every panel for consistency.
     Structure: [ {{"caption": "...", "image_prompt": "..."}} ]
     """
     payload = {
@@ -109,20 +110,20 @@ def generate_comic_script(idea, style, panels):
     match = re.search(r'\[.*\]', raw, re.DOTALL)
     return json.loads(match.group(0))
 
-def generate_image(prompt, seed, init_b64=None):
+def generate_image(prompt, seed):
+    """Fixed Text-to-Image call using shared seed for character consistency."""
     url = "https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-xl"
     headers = {"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"}
     payload = {
         "text_prompts": [{"text": prompt, "weight": 1}],
-        "cfg_scale": 7, "seed": seed, "steps": 30
+        "cfg_scale": 7, 
+        "seed": seed, # Shared seed locks the character's "DNA"
+        "steps": 30
     }
-    if init_b64:
-        payload["init_image"] = init_b64
-        payload["image_strength"] = 0.55
     
     res = fetch_from_api_with_retry(url, headers, payload)
     b64 = res.json()["artifacts"][0]["base64"]
-    return Image.open(BytesIO(base64.b64decode(b64))), b64
+    return Image.open(BytesIO(base64.b64decode(b64)))
 
 # ==========================================
 # 4. MAIN INTERFACE
@@ -132,28 +133,27 @@ user_idea = st.text_area("📖 What is the story about?", "A rogue astronaut fin
 
 if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
     try:
+        # Create a single seed for the entire comic session
         shared_seed = int(time.time()) % 1000000
+        
         with st.status("🎬 Production in progress...", expanded=True) as status:
             script = generate_comic_script(user_idea, art_style, num_panels)
             
-            anchor_b64 = None
-            if reference_image:
-                anchor_b64 = base64.b64encode(reference_image.getvalue()).decode('utf-8')
-            
             panels_out = []
             for i, scene in enumerate(script):
-                p_text = f"{art_style} style, {scene.get('image_prompt', 'Comic scene')}"
+                # We combine the style and the prompt for best results
+                full_prompt = f"{art_style} style, {scene.get('image_prompt', 'Comic scene')}"
                 c_text = scene.get("caption", "")
                 
-                status.update(label=f"🖌️ Drawing Panel {i+1}...")
-                img, curr_b64 = generate_image(p_text, shared_seed, anchor_b64)
+                status.update(label=f"🖌️ Drawing Panel {i+1} of {len(script)}...")
                 
-                if i == 0 and not reference_image:
-                    anchor_b64 = curr_b64
+                # Generate using the shared seed
+                img = generate_image(full_prompt, shared_seed)
                 
+                # Lettering
                 panels_out.append(add_comic_caption(img, c_text))
             
-            # Save results
+            # Save results to session state
             st.session_state.final_images = panels_out
             
             # Create PDF
@@ -175,13 +175,16 @@ if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
 if st.session_state.comic_ready:
     col1, col2 = st.columns(2)
     with col1:
-        st.download_button("📄 Download PDF Book", st.session_state.pdf_data, "comic.pdf", "application/pdf", use_container_width=True)
+        st.download_button("📄 Download PDF Book", st.session_state.pdf_data, "comic_book.pdf", "application/pdf", use_container_width=True)
     with col2:
-        # Create GIF
+        # Create GIF Preview
         gif_buf = BytesIO()
         st.session_state.final_images[0].save(gif_buf, format="GIF", save_all=True, append_images=st.session_state.final_images[1:], duration=2000, loop=0)
-        st.download_button("🎞️ Download GIF", gif_buf.getvalue(), "comic.gif", "image/gif", use_container_width=True)
+        st.download_button("🎞️ Download GIF Animation", gif_buf.getvalue(), "comic_motion.gif", "image/gif", use_container_width=True)
 
     st.markdown("---")
-    for img in st.session_state.final_images:
-        st.image(img, use_container_width=True)
+    # Display panels in a nice grid
+    cols = st.columns(2)
+    for idx, img in enumerate(st.session_state.final_images):
+        with cols[idx % 2]:
+            st.image(img, use_container_width=True)
