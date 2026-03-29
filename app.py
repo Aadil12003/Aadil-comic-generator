@@ -19,6 +19,7 @@ try:
 except Exception:
     API_KEY = None
 
+# Custom Dark Mode Styling
 st.markdown("""
     <style>
     .stApp { background-color: #0b0f19; color: #ffffff; }
@@ -51,7 +52,7 @@ with st.sidebar:
     }
     
     st.markdown("---")
-    st.info("💡 **Seed Locking Active:** Character DNA is locked mathematically to ensure panels match.")
+    st.info("💡 **Consistency Mode:** Character DNA and environment are locked across all panels.")
     
     if st.button("🔄 Clear & Start New Story"):
         for key in list(st.session_state.keys()): del st.session_state[key]
@@ -73,7 +74,7 @@ def fetch_from_api_with_retry(url, headers, payload, max_retries=3):
             raise Exception(f"API Error: {e}")
 
 def add_comic_caption(img, text):
-    """Pro lettering with dynamic height and Bangers font support."""
+    """Pro lettering with dynamic height."""
     width, height = img.size
     try:
         font = ImageFont.truetype("Bangers-Regular.ttf", 46)
@@ -94,21 +95,22 @@ def add_comic_caption(img, text):
     return new_img
 
 def generate_comic_script(idea, style, panels):
-    """High-matching storytelling logic."""
+    """UPGRADED: Narrative writer that enforces matching imagery."""
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     
     system_prompt = f"""
-    Create a {panels}-panel comic story. Return ONLY a JSON list.
-    STRICT RULES:
-    1. Define a character 'Visual DNA' (e.g. 'Blue hair, red cape, scar on left cheek').
-    2. Repeat this exact DNA in every single image_prompt.
-    3. JSON Format: [ {{"caption": "...", "image_prompt": "..."}} ]
+    You are a professional comic director. Create a {panels}-panel story.
+    STRICT MATCHING RULES:
+    1. Define a 'Visual Anchor' for the character (hair, clothes, distinct features).
+    2. Every `image_prompt` MUST explicitly describe the action in the `caption`.
+    3. Ensure the environment (background) is identical in every prompt.
+    4. Return ONLY a JSON list: [ {{"caption": "...", "image_prompt": "..."}} ]
     """
     payload = {
         "model": "meta/llama-3.1-8b-instruct",
         "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": idea}],
-        "temperature": 0.2
+        "temperature": 0.2 # Lower temperature = stricter matching
     }
     
     res = fetch_from_api_with_retry(url, headers, payload)
@@ -117,13 +119,12 @@ def generate_comic_script(idea, style, panels):
     return json.loads(match.group(0))
 
 def generate_image(prompt, seed):
-    """Clean Text-to-Image call (No forbidden extra inputs)."""
     url = "https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-xl"
     headers = {"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"}
     payload = {
         "text_prompts": [{"text": prompt, "weight": 1}],
-        "cfg_scale": 8, 
-        "seed": seed, # This keeps the character face and style consistent
+        "cfg_scale": 9, # Slightly higher for better prompt adherence
+        "seed": seed, 
         "steps": 30
     }
     res = fetch_from_api_with_retry(url, headers, payload)
@@ -134,7 +135,7 @@ def generate_image(prompt, seed):
 # 4. MAIN INTERFACE
 # ==========================================
 st.title("📓 Professional AI Comic Studio")
-user_idea = st.text_area("📖 Story Idea", "A cute robot named Sparky learning to cook with a clumsy master chef.", height=120)
+user_idea = st.text_area("📖 Story Idea", "A small blue robot discovers a glowing flower in a rainy cyberpunk alley.", height=120)
 
 if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
     try:
@@ -146,23 +147,27 @@ if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
             
             panels_out = []
             for i, scene in enumerate(script):
-                status.update(label=f"🖌️ Drawing Panel {i+1}...")
-                # Safety for LLaMA key name errors
+                status.update(label=f"🖌️ Drawing Panel {i+1}: {scene.get('caption')[:30]}...")
+                
+                # Dynamic mapping
                 p_text = scene.get("image_prompt") or scene.get("prompt") or "Comic scene"
                 c_text = scene.get("caption") or ""
                 
-                img = generate_image(f"{style_tags}, {p_text}", shared_seed)
+                # Combine style, user seed, and visual prompt
+                full_prompt = f"{style_tags}, {p_text}"
+                img = generate_image(full_prompt, shared_seed)
                 panels_out.append(add_comic_caption(img, c_text))
             
             st.session_state.final_images = panels_out
             
-            # --- FIXED DOWNLOADS ---
+            # PDF Creation
             pdf = FPDF()
             for p in panels_out:
                 pdf.add_page(); buf = BytesIO(); p.save(buf, format="PNG")
                 pdf.image(buf, x=10, y=10, w=190)
             st.session_state.pdf_bytes = bytes(pdf.output())
 
+            # GIF Creation
             gif_buf = BytesIO()
             st.session_state.final_images[0].save(gif_buf, format="GIF", save_all=True, append_images=st.session_state.final_images[1:], duration=2500, loop=0)
             st.session_state.gif_bytes = gif_buf.getvalue()
@@ -181,4 +186,7 @@ if st.session_state.comic_ready:
     st.markdown("---")
     cols = st.columns(2)
     for idx, img in enumerate(st.session_state.final_images):
-        with cols[idx % 2]: st.image(img, use_container_width=True)
+        with cols[idx % 2]:
+            st.markdown('<div class="panel-box">', unsafe_allow_html=True)
+            st.image(img, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
