@@ -15,7 +15,7 @@ st.set_page_config(page_title="Pro AI Comic Studio", page_icon="📓", layout="w
 
 # Securely grab the API key from Streamlit Cloud Secrets
 try:
-    API_KEY = st.secrets["NVIDIA_API_KEY"]
+    API_KEY = st.secrets["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"]
 except Exception:
     API_KEY = None
 
