@@ -4,6 +4,7 @@ import base64
 import json
 import re
 import textwrap
+import time
 from fpdf import FPDF
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
@@ -66,8 +67,23 @@ with st.sidebar:
         st.success("Reference image loaded! It will guide the character design.")
 
 # ==========================================
-# 4. CORE AI FUNCTIONS
+# 4. CORE AI FUNCTIONS WITH RETRY LOGIC
 # ==========================================
+def fetch_from_api_with_retry(url, headers, payload, max_retries=3):
+    """Robust API caller that handles 504 timeouts and retries automatically."""
+    for attempt in range(max_retries):
+        try:
+            # Added a 60-second timeout to wait for NVIDIA
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1)) # Wait longer before each retry
+                continue
+            else:
+                raise Exception(f"API Failed after {max_retries} attempts. Error: {e}")
+
 def add_comic_caption(img, text):
     """Adds a white caption box with text at the bottom of the image."""
     width, height = img.size
@@ -120,9 +136,7 @@ def generate_comic_script(idea, style, panels):
         "max_tokens": 2000 
     }
     
-    response = requests.post(url, headers=headers, json=payload)
-    response.raise_for_status()
-    
+    response = fetch_from_api_with_retry(url, headers, payload)
     raw_text = response.json()["choices"][0]["message"]["content"]
     
     # Bulletproof extraction
@@ -154,8 +168,7 @@ def generate_image(prompt, ref_image=None):
         payload["init_image"] = base64_ref
         payload["image_strength"] = 0.35 
     
-    response = requests.post(url, headers=headers, json=payload)
-    response.raise_for_status()
+    response = fetch_from_api_with_retry(url, headers, payload)
     b64_data = response.json()["artifacts"][0]["base64"]
     return Image.open(BytesIO(base64.b64decode(b64_data)))
 
