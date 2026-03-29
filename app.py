@@ -41,7 +41,6 @@ if 'pdf_bytes' not in st.session_state:
     st.session_state.pdf_bytes = None
 if 'gif_bytes' not in st.session_state:
     st.session_state.gif_bytes = None
-# This stores the mathematical seed to lock character consistency
 if 'shared_seed' not in st.session_state:
     st.session_state.shared_seed = 0
 
@@ -79,42 +78,68 @@ def fetch_from_api_with_retry(url, headers, payload, max_retries=3):
                 time.sleep(2 * (attempt + 1)) 
                 continue
             else:
-                # If we get a 422 or fail 3 times, we show the exact error
                 raise Exception(f"API Failed. Error: {e} | Response: {response.text if 'response' in locals() else 'No response'}")
 
 def add_comic_caption(img, text):
-    """Pro lettering engine: Dynamic height, centered text, comic styling."""
+    """Pro lettering engine: Scales fonts, wraps text, and calculates box height dynamically."""
     width, height = img.size
     
-    try:
-        font = ImageFont.truetype("Bangers-Regular.ttf", 36) 
-    except IOError:
-        try:
-            font = ImageFont.truetype("DejaVuSans-Bold.ttf", 26)
-        except IOError:
-            font = ImageFont.load_default()
-            
-    wrapped_text = textwrap.fill(text, width=45)
+    # 1. Robust Font Loading (Hunting for system fonts if custom is missing)
+    font = None
+    font_size = 46 # Much larger, readable font for 1024x1024 images
     
+    font_paths = [
+        "Bangers-Regular.ttf", # Your custom font (if uploaded to GitHub)
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", # Streamlit Cloud default
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", # Ubuntu fallback
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+        "arial.ttf" # Windows fallback
+    ]
+
+    for path in font_paths:
+        try:
+            font = ImageFont.truetype(path, font_size)
+            break
+        except IOError:
+            continue
+
+    if font is None:
+        font = ImageFont.load_default()
+        font_size = 10 
+
+    # 2. Dynamic Text Wrapping (~85% of image width)
+    char_width_estimate = font_size * 0.6 if font_size > 10 else 6
+    wrap_limit = int((width * 0.85) / char_width_estimate)
+    if wrap_limit < 10: wrap_limit = 40 
+    
+    wrapped_text = textwrap.fill(text, width=wrap_limit)
+
+    # 3. Calculate Text Box Dimensions
     dummy_img = Image.new('RGB', (1, 1))
     dummy_draw = ImageDraw.Draw(dummy_img)
     bbox = dummy_draw.textbbox((0, 0), wrapped_text, font=font)
     text_width = bbox[2] - bbox[0]
     text_height = bbox[3] - bbox[1]
-    
-    caption_height = max(140, text_height + 80) 
-    
-    new_img = Image.new('RGB', (width, height + caption_height), '#FFFBEB') 
+
+    # 4. Dynamic Box Height (Snug fit with padding)
+    padding_y = 35
+    caption_height = text_height + (padding_y * 2)
+    caption_height = max(100, caption_height) # Minimum aesthetic border height
+
+    # 5. Create Canvas
+    new_img = Image.new('RGB', (width, height + caption_height), '#FFFBEB') # Comic paper color
     new_img.paste(img, (0, 0))
     draw = ImageDraw.Draw(new_img)
-    
+
+    # 6. Draw Separator Line
     draw.line([(0, height), (width, height)], fill="black", width=6)
-    
+
+    # 7. Center Text Perfectly
     text_x = (width - text_width) / 2
-    text_y = height + ((caption_height - text_height) / 2) - 10
-    
+    text_y = height + ((caption_height - text_height) / 2) - 5 
+
     draw.multiline_text((text_x, text_y), wrapped_text, fill="black", font=font, align="center")
-    
+
     return new_img
 
 def generate_comic_script(idea, style, panels):
@@ -180,7 +205,7 @@ def generate_image(prompt, seed_value):
         "text_prompts": [{"text": prompt, "weight": 1}],
         "cfg_scale": 6,
         "sampler": "K_DPM_2_ANCESTRAL",
-        "seed": seed_value, # THIS IS THE MAGIC BULLET FOR CONSISTENCY
+        "seed": seed_value,
         "steps": 30
     }
     
@@ -213,7 +238,6 @@ if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
                 for i, scene in enumerate(st.session_state.script_data):
                     status.update(label=f"🖌️ Illustrating & Lettering Panel {i+1} of {num_panels}...", state="running")
                     
-                    # Pass the prompt AND the shared seed to the image generator
                     base_img = generate_image(scene["image_prompt"], st.session_state.shared_seed)
                     final_img = add_comic_caption(base_img, scene["caption"])
                     temp_images.append(final_img)
