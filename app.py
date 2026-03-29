@@ -31,7 +31,7 @@ st.markdown("""
 
 if 'comic_ready' not in st.session_state: st.session_state.comic_ready = False
 if 'final_images' not in st.session_state: st.session_state.final_images = []
-if 'pdf_data' not in st.session_state: st.session_state.pdf_data = None
+if 'pdf_bytes' not in st.session_state: st.session_state.pdf_bytes = None
 
 # ==========================================
 # 2. SIDEBAR TOOLS & ART PRESETS
@@ -42,7 +42,6 @@ with st.sidebar:
     
     num_panels = st.number_input("Number of Panels", min_value=1, value=4, step=1)
     
-    # Advanced Art Presets
     art_choice = st.selectbox("Art Style", [
         "Modern Superhero (Marvel/DC)", 
         "Vintage 1950s Newsprint", 
@@ -53,7 +52,6 @@ with st.sidebar:
         "Rough Pencil Sketch"
     ])
     
-    # Mapping presets to technical prompts
     style_map = {
         "Modern Superhero (Marvel/DC)": "highly detailed comic book art, sharp inks, vibrant colors, heroic lighting, cinematic",
         "Vintage 1950s Newsprint": "retro comic book style, ben-day dots, muted colors, aged paper texture, 1950s aesthetic",
@@ -114,8 +112,7 @@ def generate_comic_script(idea, style, panels):
     
     system_prompt = f"""
     Write a {panels}-panel comic. Return ONLY a JSON list.
-    Rules: Short captions (15 words). 
-    CRITICAL: Describe the character's clothing and hair exactly the same in every panel.
+    Rules: Short captions (15 words). Describe characters identically in every panel.
     Structure: [ {{"caption": "...", "image_prompt": "..."}} ]
     """
     payload = {
@@ -134,9 +131,7 @@ def generate_image(prompt, seed):
     headers = {"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"}
     payload = {
         "text_prompts": [{"text": prompt, "weight": 1}],
-        "cfg_scale": 8, 
-        "seed": seed, 
-        "steps": 30
+        "cfg_scale": 8, "seed": seed, "steps": 30
     }
     
     res = fetch_from_api_with_retry(url, headers, payload)
@@ -159,7 +154,6 @@ if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
             
             panels_out = []
             for i, scene in enumerate(script):
-                # Injecting the style tags into every prompt
                 full_prompt = f"{style_tags}, {scene.get('image_prompt', 'Comic scene')}"
                 c_text = scene.get("caption", "")
                 
@@ -169,14 +163,19 @@ if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
             
             st.session_state.final_images = panels_out
             
-            # PDF Creation
+            # --- FIXED PDF CREATION SECTION ---
             pdf = FPDF()
             for p in panels_out:
                 pdf.add_page()
                 buf = BytesIO()
                 p.save(buf, format="PNG")
+                buf.seek(0)
+                # We place the image and center it roughly on the A4 page
                 pdf.image(buf, x=10, y=10, w=190)
-            st.session_state.pdf_data = pdf.output()
+            
+            # CRITICAL FIX: Convert bytearray output to raw bytes for Streamlit
+            st.session_state.pdf_bytes = bytes(pdf.output())
+            # ----------------------------------
             
             st.session_state.comic_ready = True
             status.update(label="🎉 Production Complete!", state="complete")
@@ -188,14 +187,20 @@ if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
 if st.session_state.comic_ready:
     col1, col2 = st.columns(2)
     with col1:
-        st.download_button("📄 Download PDF Book", st.session_state.pdf_data, "my_comic.pdf", "application/pdf", use_container_width=True)
+        # Streamlit now receives raw bytes(), which fixes the Exception
+        st.download_button(
+            label="📄 Download PDF Book",
+            data=st.session_state.pdf_bytes,
+            file_name="my_ai_comic.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
     with col2:
         gif_buf = BytesIO()
         st.session_state.final_images[0].save(gif_buf, format="GIF", save_all=True, append_images=st.session_state.final_images[1:], duration=2000, loop=0)
         st.download_button("🎞️ Download GIF Preview", gif_buf.getvalue(), "my_comic.gif", "image/gif", use_container_width=True)
 
     st.markdown("---")
-    # Display in a 2-column comic grid
     grid_cols = st.columns(2)
     for idx, img in enumerate(st.session_state.final_images):
         with grid_cols[idx % 2]:
