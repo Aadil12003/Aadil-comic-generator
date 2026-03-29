@@ -73,13 +73,12 @@ def fetch_from_api_with_retry(url, headers, payload, max_retries=3):
     """Robust API caller that handles 504 timeouts and retries automatically."""
     for attempt in range(max_retries):
         try:
-            # 60-second timeout to wait for NVIDIA
             response = requests.post(url, headers=headers, json=payload, timeout=60)
             response.raise_for_status()
             return response
         except requests.exceptions.RequestException as e:
             if attempt < max_retries - 1:
-                time.sleep(2 * (attempt + 1)) # Wait longer before each retry
+                time.sleep(2 * (attempt + 1)) 
                 continue
             else:
                 raise Exception(f"API Failed after {max_retries} attempts. Error: {e}")
@@ -103,53 +102,51 @@ def add_comic_caption(img, text):
     return new_img
 
 def generate_comic_script(idea, style, panels):
-    """Calls NVIDIA LLaMA 3 to act as the Comic Director."""
+    """Calls NVIDIA LLaMA 3 to act as the Comic Director using Strict JSON Mode."""
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     
     system_prompt = f"""
     You are a master comic book writer. Convert the user's idea into a {panels}-panel story.
     
-    CRITICAL JSON RULES:
-    1. Output ONLY a valid JSON array. NO conversational text before or after the JSON.
-    2. Start your response with [ and end with ].
-    3. DO NOT use double quotes (") inside your string values. Use single quotes (') instead.
-    4. Character consistency is CRITICAL. Define exact appearance (clothes, hair, face) and repeat it exactly in every prompt.
+    CRITICAL RULES:
+    1. You MUST output a valid JSON object.
+    2. The JSON object MUST contain a single key called "panels" which holds an array of scenes.
+    3. Character consistency is CRITICAL. Define exact appearance (clothes, hair, face) and repeat it exactly in every prompt.
     
-    JSON STRUCTURE:
-    [
-      {{
-        "scene_number": 1,
-        "caption": "A dramatic narration or dialogue box.",
-        "image_prompt": "{style} style, high quality. [Exact Character Description]. [Action]. [Environment]."
-      }}
-    ]
+    REQUIRED JSON STRUCTURE:
+    {{
+      "panels": [
+        {{
+          "scene_number": 1,
+          "caption": "A dramatic narration or dialogue box.",
+          "image_prompt": "{style} style, high quality. [Exact Character Description]. [Action]. [Environment]."
+        }}
+      ]
+    }}
     """
     
     payload = {
-        # CHANGED: Switched to the much faster and more reliable 8B model
         "model": "meta/llama-3.1-8b-instruct",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"My comic idea: {idea}"}
         ],
         "temperature": 0.3,
-        # CHANGED: Lowered tokens to force a faster response from the server
-        "max_tokens": 1000 
+        "max_tokens": 1500,
+        "response_format": {"type": "json_object"} # THIS FORCES 100% VALID JSON
     }
     
     response = fetch_from_api_with_retry(url, headers, payload)
     raw_text = response.json()["choices"][0]["message"]["content"]
     
-    # Bulletproof extraction
-    match = re.search(r'\[.*\]', raw_text, re.DOTALL)
-    clean_text = match.group(0) if match else raw_text
-    
     try:
-        return json.loads(clean_text)
-    except json.JSONDecodeError as e:
-        print(f"FAILED TO PARSE JSON. RAW AI OUTPUT WAS:\n{raw_text}")
-        raise Exception("The AI writer made a formatting error in the script. Please click 'Produce My Comic' again to regenerate!")
+        # Load the JSON and extract the list of panels from inside the object
+        data = json.loads(raw_text)
+        return data["panels"]
+    except Exception as e:
+        print(f"RAW OUTPUT FAILED:\n{raw_text}")
+        raise Exception(f"The AI writer encountered a structural error. Please try again! (Details: {e})")
 
 def generate_image(prompt, ref_image=None):
     """Calls NVIDIA SDXL to generate the panel."""
@@ -236,9 +233,9 @@ if st.session_state.comic_ready:
         with cols[col_index]:
             st.markdown("<div class='panel-box'>", unsafe_allow_html=True)
             st.image(img, use_container_width=True)
-            st.markdown(f"**Scene {scene['scene_number']}**")
+            st.markdown(f"**Scene {scene.get('scene_number', i+1)}**")
             with st.expander("Technical Prompt"):
-                st.caption(scene["image_prompt"])
+                st.caption(scene.get("image_prompt", "No prompt found."))
             st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("### 📥 Download Deliverables")
