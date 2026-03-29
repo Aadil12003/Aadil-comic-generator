@@ -73,7 +73,7 @@ def fetch_from_api_with_retry(url, headers, payload, max_retries=3):
     """Robust API caller that handles 504 timeouts and retries automatically."""
     for attempt in range(max_retries):
         try:
-            # Added a 60-second timeout to wait for NVIDIA
+            # 60-second timeout to wait for NVIDIA
             response = requests.post(url, headers=headers, json=payload, timeout=60)
             response.raise_for_status()
             return response
@@ -127,13 +127,15 @@ def generate_comic_script(idea, style, panels):
     """
     
     payload = {
-        "model": "meta/llama-3.1-70b-instruct",
+        # CHANGED: Switched to the much faster and more reliable 8B model
+        "model": "meta/llama-3.1-8b-instruct",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"My comic idea: {idea}"}
         ],
         "temperature": 0.3,
-        "max_tokens": 2000 
+        # CHANGED: Lowered tokens to force a faster response from the server
+        "max_tokens": 1000 
     }
     
     response = fetch_from_api_with_retry(url, headers, payload)
