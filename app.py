@@ -134,7 +134,7 @@ def generate_image(prompt, seed):
 # ==========================================
 # 4. MAIN INTERFACE
 # ==========================================
-st.title("📓 Professional AI Comic Studio")
+st.title("📓 Aadil's AI Comic Studio")
 user_idea = st.text_area("📖 Story Idea", "A small blue robot discovers a glowing flower in a rainy cyberpunk alley.", height=120)
 
 if st.button("🚀 Produce My Comic", use_container_width=True, type="primary"):
